@@ -4,5 +4,5 @@ services:
     build: .
     container_name: chrono-generator
     ports:
-      - "5679:5679"  # Port 5050 sur ton NAS -> Port 5000 interne
+      - "5679:8080" 
     restart: always
