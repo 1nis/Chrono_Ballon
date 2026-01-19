@@ -4,5 +4,5 @@ services:
     build: .
     container_name: chrono-generator
     ports:
-      - "5679:8080" 
+      - "5050:5000"
     restart: always
