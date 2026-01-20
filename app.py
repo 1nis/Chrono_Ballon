@@ -1,7 +1,6 @@
 from flask import Flask, request, send_file
 import requests
-from PIL import Image, Image
-Draw, ImageFont, ImageFilter, ImageOps
+from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageOps
 import io
 import textwrap
 import os
@@ -9,19 +8,24 @@ import os
 app = Flask(__name__)
 
 # --- Configuration ---
+# On utilise une URL stable pour la police Anton
 FONT_URL = "https://github.com/google/fonts/raw/main/ofl/anton/Anton-Regular.ttf"
 FONT_PATH = "Anton-Regular.ttf"
 TARGET_WIDTH = 1080
 TARGET_HEIGHT = 1350
-# On augmente la qualité JPEG (max 100, 95 est excellent)
 JPEG_QUALITY = 95
 
-# Télécharger la police si elle n'existe pas
+# Télécharger la police au démarrage si absente
 if not os.path.exists(FONT_PATH):
     print(f"Téléchargement de la police {FONT_PATH}...")
-    response = requests.get(FONT_URL)
-    with open(FONT_PATH, 'wb') as f:
-        f.write(response.content)
+    try:
+        response = requests.get(FONT_URL)
+        response.raise_for_status()
+        with open(FONT_PATH, 'wb') as f:
+            f.write(response.content)
+        print("Police téléchargée avec succès.")
+    except Exception as e:
+        print(f"Erreur téléchargement police: {e}")
 
 @app.route('/generate', methods=['POST'])
 def generate_image():
@@ -38,84 +42,82 @@ def generate_image():
         response.raise_for_status()
         img_source = Image.open(io.BytesIO(response.content)).convert("RGB")
 
-        # --- NOUVELLE LOGIQUE DE REDIMENSIONNEMENT (Fit & Blur) ---
-
-        # A. Créer le fond flouté (Canvas)
-        # On redimensionne l'image source pour remplir le cadre cible, puis on floute.
+        # --- LOGIQUE FIT & BLUR ---
+        
+        # A. Créer le fond flouté
+        # On remplit tout l'espace 1080x1350 avec l'image (quitte à couper)
         background = ImageOps.fit(img_source, (TARGET_WIDTH, TARGET_HEIGHT), method=Image.Resampling.LANCZOS)
-        background = background.filter(ImageFilter.GaussianBlur(radius=40)) # Radius = intensité du flou
+        # On applique un flou puissant
+        background = background.filter(ImageFilter.GaussianBlur(radius=40))
 
-        # B. Préparer l'image principale (Foreground)
+        # B. Préparer l'image principale (nette)
         img_foreground = img_source.copy()
-        # .thumbnail redimensionne pour que l'image RENTRE dans la boîte sans être coupée ni déformée.
-        # On utilise LANCZOS pour une meilleure qualité de redimensionnement.
+        # On la redimensionne pour qu'elle tienne ENTIÈREMENT dans le cadre (sans couper)
         img_foreground.thumbnail((TARGET_WIDTH, TARGET_HEIGHT), Image.Resampling.LANCZOS)
 
-        # C. Coller l'image principale au centre du fond flouté
-        # Calcul de la position centrale
+        # C. Centrer l'image nette sur le fond flou
         x_pos = (TARGET_WIDTH - img_foreground.width) // 2
         y_pos = (TARGET_HEIGHT - img_foreground.height) // 2
         background.paste(img_foreground, (x_pos, y_pos))
 
-        # L'image finale est le résultat de cette composition
         final_image = background
+        # --- FIN LOGIQUE ---
 
-        # --- FIN NOUVELLE LOGIQUE ---
-
-
-        # 4. Ajouter le texte (Typography "Anton")
+        # 2. Ajouter le texte
         draw = ImageDraw.Draw(final_image)
-
-        # Configuration du texte
+        
+        # Réglages texte
         font_size = 120
-        text_color = (255, 255, 255) # Blanc
+        # On charge la police (ou une police par défaut si échec)
+        try:
+            font = ImageFont.truetype(FONT_PATH, font_size)
+        except:
+            font = ImageFont.load_default()
+
         padding_x = 50
         padding_y = 50
-        max_text_width = TARGET_WIDTH - (padding_x * 2)
-
-        font = ImageFont.truetype(FONT_PATH, font_size)
-
-        # Wrapper le texte (retour à la ligne auto)
-        lines = textwrap.wrap(headline_text, width=15) # Ajuster le width selon tes besoins
+        
+        # Wrapper le texte pour qu'il ne dépasse pas
+        # On estime grossièrement : environ 15 caractères pour cette taille de police
+        lines = textwrap.wrap(headline_text, width=15)
 
         # Calculer la hauteur totale du bloc de texte pour le placer en bas
         total_text_height = 0
+        line_heights = []
         for line in lines:
             bbox = draw.textbbox((0, 0), line, font=font)
-            total_text_height += bbox[3] - bbox[1] + 10 # +10 pour l'interligne
+            h = bbox[3] - bbox[1]
+            line_heights.append(h)
+            total_text_height += h + 10 # +10 padding entre lignes
 
-        # Position de départ Y (en bas)
-        current_y = TARGET_HEIGHT - total_text_height - padding_y - 100 # -100 pour remonter un peu
+        # Position de départ Y (Aligné en bas avec une marge)
+        current_y = TARGET_HEIGHT - total_text_height - padding_y - 80
 
-        # Dessiner chaque ligne
-        for line in lines:
-            bbox = draw.textbbox((0, 0), line, font=font)
-            text_width = bbox[2] - bbox[0]
-            text_height = bbox[3] - bbox[1]
-            x = padding_x # Aligné à gauche
+        # Dessiner le texte ligne par ligne
+        for i, line in enumerate(lines):
+            # Centrer le texte horizontalement ? (Optionnel, ici aligné gauche + marge)
+            # Pour centrer : x = (TARGET_WIDTH - draw.textlength(line, font)) // 2
+            x = padding_x 
             
-            # Optionnel : Petit contour noir pour lisibilité si le fond est clair
-            shadow_offset = 3
+            # Effet "Ombre portée" noire pour lisibilité sur fond clair
+            shadow_offset = 4
             draw.text((x + shadow_offset, current_y + shadow_offset), line, font=font, fill=(0,0,0))
             
-            draw.text((x, current_y), line, font=font, fill=text_color)
-            current_y += text_height + 10
+            # Texte blanc
+            draw.text((x, current_y), line, font=font, fill=(255, 255, 255))
+            
+            current_y += line_heights[i] + 10
 
-        # 5. Sauvegarder en mémoire avec HAUTE QUALITÉ
+        # 3. Sauvegarder
         img_byte_arr = io.BytesIO()
-        # quality=95 assure une très bonne qualité JPEG (par défaut c'est souvent 75)
-        # optimize=True aide à réduire la taille sans perdre de qualité
         final_image.save(img_byte_arr, format='JPEG', quality=JPEG_QUALITY, optimize=True)
         img_byte_arr.seek(0)
 
         return send_file(img_byte_arr, mimetype='image/jpeg')
 
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Erreur: {e}")
         return {"error": str(e)}, 500
 
 if __name__ == '__main__':
-    # Pour le dev local
     app.run(debug=True, host='0.0.0.0', port=5050)
-    # Pour la prod avec Gunicorn :
-    # gunicorn -w 4 -b 0.0.0.0:5050 app:app
